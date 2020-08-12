@@ -1,5 +1,5 @@
 # A simple go app
-Demonstrates deploying to a TKG cluster on v7k8s with Gitlab CI.
+Demonstrates deploying to a Tanzu Kuberentes cluster on VSphere with Kubernetes with Gitlab CI.
 App originally from https://github.com/galexrt/presentation-gitlab-k8s.
 
 ## Development flow
@@ -36,17 +36,17 @@ Add the following to https://gitlab.my.com/devops/go-demo/-/settings/ci_cd -> Va
 
 `CI_REGISTRY_HOST` : Ip or hostname for image registry `192.168.2.3`
 
-`CI_REGISTRY_IMAGE` : used by Kaniko to push and in deployment manifest `${CI_REGISTRY_HOST}/${CI_REGISTRY_PROJ}/dev/${CI_PROJECT_NAME}`
+`CI_REGISTRY_IMAGE` : used by Kaniko to push and in deployment manifest  eg `${CI_REGISTRY_HOST}/${CI_REGISTRY_PROJ}/dev/${CI_PROJECT_NAME}`
 	
 `CI_REGISTRY_PASSWORD` : used by curl to tag image in harbor
 	
-`CI_REGISTRY_PROJ` : Harbor project name == V7k8s SC Namespace where the TKC is deployed eg `demo`
+`CI_REGISTRY_PROJ` : Harbor project name == VSphere with Kubernetes Supervisor Cluster Namespace where Tanzu Kuberentes cluster is deployed eg `demo`
 	
 
 `CI_REGISTRY_USER` : used by curl to tag image in harbor `devops@vsphere.local`
 	
 
-`INGRESS_DOMAIN` : FQDN suffix for ingress eg: `goapps.my.com` . will be prefixed by environment name and needs a wildcard entry in DNS pointing to ingress IP 
+`INGRESS_DOMAIN` : FQDN suffix for ingress eg: `goapps.my.com` . will be prefixed by environment name and needs a wildcard entry in DNS pointing to LB IP 
 	
 `KUBE_TOKEN` ; Used by kubectl .  
 ```
