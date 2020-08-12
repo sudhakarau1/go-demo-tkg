@@ -1,0 +1,161 @@
+image:
+  name: golang:1.12.5-stretch
+  entrypoint: ["/bin/sh", "-c"]
+
+variables:
+  KUBECMD: "kubectl -n ${KUBE_NAMESPACE}  --token ${KUBE_TOKEN} "
+  KUBECTLIMG: "bitnami/kubectl:1.17.4"
+
+stages:
+  - test
+  - build
+  - release
+  - retag
+  - review
+  - deploy
+
+test:
+  stage: test
+  except:
+    - tags
+  script:
+    - make test
+
+compile:
+  stage: build
+  except:
+    - tags
+  script:
+    - make build
+  artifacts:
+    paths:
+      - app
+
+image_build:
+  stage: release
+  except:
+    - tags
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  before_script:
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - |
+      echo "$CI_CUSTOM_CA" >> /kaniko/ssl/certs/ca-certificates.crt    
+  script:
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"username\":\"$CI_REGISTRY_USER\",\"password\":\"$CI_REGISTRY_PASSWORD\"}}}" > /kaniko/.docker/config.json
+    - /kaniko/executor --context $CI_PROJECT_DIR --dockerfile $CI_PROJECT_DIR/Dockerfile --destination $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+deploy_review:
+  image:
+    name: $KUBECTLIMG
+    entrypoint: ["/bin/sh", "-c"]
+  stage: review
+  except:
+    - tags
+  environment:
+    name: review/$CI_BUILD_REF_NAME
+    url: http://$CI_ENVIRONMENT_SLUG.${INGRESS_DOMAIN}
+    on_stop: stop_review
+  script:
+    - cd manifests/
+    - |
+      # Create registry secret and patch default SA
+      echo running in ${KUBE_NAMESPACE}
+      $KUBECMD create secret docker-registry regcred --docker-server="${CI_REGISTRY}" --docker-username="${CI_REGISTRY_USER}" \
+      --docker-password="${CI_REGISTRY_PASSWORD}" --docker-email="${CI_REGISTRY_USER}" --dry-run -o yaml >  regcred.yaml
+      $KUBECMD apply -f regcred.yaml
+      $KUBECMD patch serviceaccount default -p '{"imagePullSecrets":[{"name":"regcred"}]}'
+    - sed -i "s~__CI_REGISTRY_IMAGE__~${CI_REGISTRY_IMAGE}~" deployment.yaml
+    - sed -i "s/__CI_ENVIRONMENT_SLUG__/${CI_ENVIRONMENT_SLUG}/" deployment.yaml ingress.yaml service.yaml
+    - sed -i "s/__PROJPREFIX__/${CI_PROJECT_NAME}/" deployment.yaml ingress.yaml service.yaml
+    - sed -i "s/__INGRESS_DOMAIN__/${INGRESS_DOMAIN}/" deployment.yaml ingress.yaml service.yaml
+    - sed -i "s/__VERSION__/${CI_COMMIT_SHORT_SHA}/" deployment.yaml ingress.yaml service.yaml
+    - |
+      # Apply manifests
+      if $KUBECMD apply -f deployment.yaml | grep -q unchanged; then
+          echo "=> Patching deployment to force image update."
+          $KUBECMD patch -f deployment.yaml -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"ci-last-updated\":\"$(date +'%s')\"}}}}}"
+      else
+          echo "=> Deployment apply has changed the object, no need to force image update."
+      fi
+    - $KUBECMD apply -f service.yaml || true
+    - $KUBECMD apply -f ingress.yaml
+    - $KUBECMD rollout status -f deployment.yaml
+    - $KUBECMD get deploy,svc,ing,pod -l app="${CI_PROJECT_NAME}",ref="${CI_ENVIRONMENT_SLUG}"
+
+stop_review:
+  image:
+    name: $KUBECTLIMG
+    entrypoint: ["/bin/sh", "-c"]
+  stage: review
+  variables:
+    GIT_STRATEGY: none
+  when: manual
+  only:
+    - branches
+  except:
+    - tags
+  environment:
+    name: review/$CI_BUILD_REF_NAME
+    action: stop
+  script:
+    - $KUBECMD version
+    - $KUBECMD delete ing -l ref=${CI_ENVIRONMENT_SLUG}
+    - $KUBECMD delete all -l ref=${CI_ENVIRONMENT_SLUG}
+
+retag_live:
+  stage: deploy
+  tags:
+    - live
+  environment:
+    name: live
+    action: start
+    url: http://$CI_ENVIRONMENT_SLUG.${INGRESS_DOMAIN}
+    kubernetes:
+      namespace: production
+  only:
+    - tags
+  script:
+    -  CURLSTAT=$(curl  -s -o curl.log -w "%{http_code}" -X POST "${CI_REGISTRY}api/repositories/${CI_REGISTRY_PROJ}/live/${CI_PROJECT_NAME}/tags" -u  "${CI_REGISTRY_USER}":"${CI_REGISTRY_PASSWORD}"  -H "Content-type:application/json" -k -i -d "{ \"override\":true, \"src_image\":\"${CI_REGISTRY_PROJ}/dev/${CI_PROJECT_NAME}:${CI_COMMIT_SHORT_SHA}\", \"tag\":\"${CI_COMMIT_TAG}\"}")
+    - >
+      if [ "$CURLSTAT" == "200" ]; then
+        exit 0
+      else
+        cat curl.log
+        exit 1
+      fi
+
+deploy_live:
+  image:
+    name: $KUBECTLIMG
+    entrypoint: ["/bin/sh", "-c"]
+  stage: deploy
+  tags:
+    - live
+  environment:
+    name: live
+    url: http://$CI_ENVIRONMENT_SLUG.${INGRESS_DOMAIN}
+    kubernetes:
+      namespace: production
+  only:
+    - tags
+  when: manual
+  script:
+    - cd manifests/
+    - |
+      # Create registry secret and patch default SA
+      $KUBECMD create secret docker-registry regcred --docker-server="${CI_REGISTRY}" --docker-username="${CI_REGISTRY_USER}" \
+      --docker-password="${CI_REGISTRY_PASSWORD}" --docker-email="${CI_REGISTRY_USER}" --dry-run -o yaml >  regcred.yaml
+      $KUBECMD apply -f regcred.yaml
+      $KUBECMD patch serviceaccount default -p '{"imagePullSecrets":[{"name":"regcred"}]}'
+    - sed -i "s~__CI_REGISTRY_IMAGE__~${CI_REGISTRY_HOST}/${CI_REGISTRY_PROJ}/live/${CI_PROJECT_NAME}~" deployment.yaml
+    - sed -i "s/__CI_ENVIRONMENT_SLUG__/${CI_ENVIRONMENT_SLUG}/" deployment.yaml ingress.yaml service.yaml
+    - sed -i "s/__PROJPREFIX__/${CI_PROJECT_NAME}/" deployment.yaml ingress.yaml service.yaml
+    - sed -i "s/__VERSION__/${CI_COMMIT_TAG}/" deployment.yaml ingress.yaml service.yaml
+    - sed -i "s/__INGRESS_DOMAIN__/${INGRESS_DOMAIN}/" deployment.yaml ingress.yaml service.yaml
+    - $KUBECMD apply -f deployment.yaml
+    - $KUBECMD apply -f service.yaml
+    - $KUBECMD apply -f ingress.yaml
+    - $KUBECMD rollout status -f deployment.yaml
+    - $KUBECMD get deploy,svc,ing,pod -l app="${CI_PROJECT_NAME}",ref="${CI_ENVIRONMENT_SLUG}"

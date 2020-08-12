@@ -1,0 +1,17 @@
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: __PROJPREFIX__-__CI_ENVIRONMENT_SLUG__
+  labels:
+    app: __PROJPREFIX__
+    ref: __CI_ENVIRONMENT_SLUG__
+spec:
+  rules:
+  - host: __CI_ENVIRONMENT_SLUG__.__INGRESS_DOMAIN__
+    http:
+      paths:
+      - path: /
+        backend:
+          serviceName: __PROJPREFIX__-__CI_ENVIRONMENT_SLUG__
+          servicePort: 8000
