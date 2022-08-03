@@ -1,5 +1,5 @@
 # A simple go app
-Demonstrates deploying to a Tanzu Kuberentes cluster on VSphere with Kubernetes with Gitlab CI.
+Demonstrates deploying to a VMware Tanzu Kuberentes cluster on VSphere with Kubernetes with Gitlab CI.
 App originally from https://github.com/galexrt/presentation-gitlab-k8s.
 
 ## Development flow
